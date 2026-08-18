@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -111,7 +112,7 @@ func runRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: run: %v\n", err)
 		return 1
 	}
-	return runStub(rest, jsonOut, rdrPath)
+	return exitCodeOf(runStub(rest, jsonOut, rdrPath))
 }
 
 // runInspect parses the `inspect` subcommand's flags and dispatches to the
@@ -122,7 +123,7 @@ func runInspect(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: inspect: %v\n", err)
 		return 1
 	}
-	return inspectStub(rest, jsonOut)
+	return exitCodeOf(inspectStub(rest, jsonOut))
 }
 
 // runDoctor parses the `doctor` subcommand's flags (none accepted) and
@@ -133,7 +134,7 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: doctor: %v\n", err)
 		return 1
 	}
-	return doctorStub(rest)
+	return exitCodeOf(doctorStub(rest))
 }
 
 // runReport parses the `report` subcommand's flags and dispatches to the
@@ -144,31 +145,86 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: report: %v\n", err)
 		return 1
 	}
-	return reportStub(rest, jsonOut)
+	return exitCodeOf(reportStub(rest, jsonOut))
 }
 
-// runStub is the placeholder run pipeline: it reports that the subcommand is
-// not yet implemented and returns a placeholder exit code. The real pipeline
-// and the exit-code contract land in later changes.
-func runStub(rest []string, jsonOut bool, rdrPath string) int {
-	fmt.Fprintln(os.Stderr, "why: run: not implemented")
+// exitError is a why tool failure: it implements error and carries the
+// pinned process exit code. Tool failures — usage errors, a missing target,
+// tracer failure, or a .rdr write failure — carry code 1. It is never used
+// to carry a diagnosis count or the target child's raw exit code: completed
+// runs map through exitCode (0/2), so why's own exit code is always 0/1/2.
+type exitError struct {
+	code int
+	msg  string
+}
+
+// Error implements error.
+func (e *exitError) Error() string { return e.msg }
+
+// ExitCode returns the pinned exit code this failure maps to: 1 for why
+// tool failures.
+func (e *exitError) ExitCode() int { return e.code }
+
+// exitCode maps a completed run's diagnosis count to the pinned CLI exit
+// code: 0 = report produced with no diagnosis, 2 = at least one diagnosis
+// emitted. Why tool failures exit 1 through exitError and never reach this
+// function. The target child's raw exit code is never mapped here either: it
+// appears only inside the report, keeping why's own exit code 0/1/2.
+func exitCode(numDiagnoses int) int {
+	if numDiagnoses > 0 {
+		return 2
+	}
 	return 0
 }
 
-// inspectStub is the placeholder inspect pipeline.
-func inspectStub(rest []string, jsonOut bool) int {
-	fmt.Fprintln(os.Stderr, "why: inspect: not implemented")
-	return 0
+// exitCodeOf converts a subcommand result into why's pinned exit code: nil
+// is 0 (completed run with no diagnosis), *exitError yields its code (1 for
+// tool failures), and any other error is also 1. A non-nil error is written
+// to stderr so every failure path reports uniformly.
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, err)
+	var ee *exitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return 1
 }
 
-// doctorStub is the placeholder doctor pipeline.
-func doctorStub(rest []string) int {
-	fmt.Fprintln(os.Stderr, "why: doctor: not implemented")
-	return 0
+// runStub is the placeholder run pipeline. A missing target is a why tool
+// failure (exit 1 via *exitError); a present target returns nil — a
+// completed report with no diagnosis (exit 0). The real pipeline lands in a
+// later change and will map the diagnosis count through exitCode (0/2).
+func runStub(rest []string, jsonOut bool, rdrPath string) error {
+	if len(rest) == 0 {
+		return &exitError{code: 1, msg: "why: run: missing target"}
+	}
+	return nil
 }
 
-// reportStub is the placeholder report pipeline.
-func reportStub(rest []string, jsonOut bool) int {
-	fmt.Fprintln(os.Stderr, "why: report: not implemented")
-	return 0
+// inspectStub is the placeholder inspect pipeline: a missing target is a why
+// tool failure (exit 1), a present target a completed inspection (exit 0).
+func inspectStub(rest []string, jsonOut bool) error {
+	if len(rest) == 0 {
+		return &exitError{code: 1, msg: "why: inspect: missing target"}
+	}
+	return nil
+}
+
+// doctorStub is the placeholder doctor pipeline. doctor takes no target; the
+// real self-diagnostics land in a later change and return exit 0 (all ok) or
+// 1 (a problem found).
+func doctorStub(rest []string) error {
+	return nil
+}
+
+// reportStub is the placeholder report pipeline: a missing target is a why
+// tool failure (exit 1), a present target a completed report (exit 0).
+func reportStub(rest []string, jsonOut bool) error {
+	if len(rest) == 0 {
+		return &exitError{code: 1, msg: "why: report: missing target"}
+	}
+	return nil
 }
