@@ -1,0 +1,12 @@
+why
+Copyright (c) 2026 why contributors
+
+This product includes software developed by the why contributors.
+See the LICENSE file for the full MIT license text.
+
+Module path placeholder
+-----------------------
+The Go module path is the local placeholder "why" (not a canonical
+import path such as github.com/<owner>/why). This is intentional for
+the current development stage; the path will be updated to the canonical
+repository path before the first public release.

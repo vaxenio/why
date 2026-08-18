@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+/bin
+
+# Trace files
+*.rdr
+
+# Fixture binaries are versioned test inputs - committed on purpose.
+!test/fixtures/bin/
+!test/fixtures/bin/**
