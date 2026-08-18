@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -119,7 +120,7 @@ func assertELF(t *testing.T, path string, f elfFixture) {
 	if got := interpOf(t, fh); got != f.wantInterp {
 		t.Errorf("fixture %s: PT_INTERP=%q, want %q", filepath.Base(path), got, f.wantInterp)
 	}
-	if got, err := fh.DynString(elf.DT_NEEDED); err != nil || !equalStrings(got, f.wantNeeded) {
+	if got, err := fh.DynString(elf.DT_NEEDED); err != nil || !slices.Equal(got, f.wantNeeded) {
 		t.Errorf("fixture %s: DT_NEEDED=%v (err=%v), want %v", filepath.Base(path), got, err, f.wantNeeded)
 	}
 }
@@ -176,16 +177,4 @@ func readFixture(t *testing.T, path string) []byte {
 		t.Fatalf("read fixture %s: %v", path, err)
 	}
 	return b
-}
-
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }
