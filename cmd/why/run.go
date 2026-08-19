@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"why/internal/collect"
@@ -32,6 +33,13 @@ func runPipeline(rest []string, jsonOut bool, rdrPath string) (int, error) {
 
 	if _, err := os.Stat(target); err != nil {
 		return 0, &exitError{code: 1, msg: fmt.Sprintf("why: run: target not found: %s", target)}
+	}
+	// Resolve to an absolute path: the tracers exec the target, and exec of a
+	// bare relative name searches PATH, not the working directory (Linux).
+	// Windows' CreateProcess searches cwd, so without this the same command
+	// behaves differently on the two platforms.
+	if abs, err := filepath.Abs(target); err == nil {
+		target = abs
 	}
 
 	ev := evidence.Evidence{SourcePath: target, TargetPath: target}
