@@ -4,6 +4,7 @@ package linux
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -219,5 +220,35 @@ func TestStreamBounds(t *testing.T) {
 	}
 	if !s.wasTruncated() {
 		t.Fatal("byte bound exceeded but truncated not set")
+	}
+}
+
+// TestRunCapturesOutput exercises output capture end-to-end: the target
+// writes to stdout and stderr and exits 1; both streams must appear in the
+// Output events (rules like wrong-cwd and missing-env-var depend on it).
+func TestRunCapturesOutput(t *testing.T) {
+	tr, err := New("/bin/sh", "-c", "echo to-stdout; echo to-stderr 1>&2; exit 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Run(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr []string
+	for _, e := range tr.Events() {
+		if o, ok := e.(evidence.Output); ok {
+			if o.Stream == "stdout" {
+				stdout = append(stdout, o.Lines...)
+			} else {
+				stderr = append(stderr, o.Lines...)
+			}
+		}
+	}
+	t.Logf("stdout=%q stderr=%q", stdout, stderr)
+	if !slices.Contains(stdout, "to-stdout") {
+		t.Errorf("stdout not captured: %q", stdout)
+	}
+	if !slices.Contains(stderr, "to-stderr") {
+		t.Errorf("stderr not captured: %q", stderr)
 	}
 }
