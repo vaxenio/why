@@ -34,8 +34,11 @@ func assertPE(t *testing.T, path, wantArch string) {
 	}
 	mach := binary.LittleEndian.Uint16(b[e+4:])
 	want := uint16(machineI386)
-	if wantArch == "amd64" {
+	switch wantArch {
+	case "amd64":
 		want = machineAmd64
+	case "arm64":
+		want = machineArm64
 	}
 	if mach != want {
 		t.Errorf("fixture %s: machine=0x%x, want 0x%x (%s)", filepath.Base(path), mach, want, wantArch)

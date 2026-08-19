@@ -6,26 +6,24 @@ import (
 	"fmt"
 	"os"
 	"strings"
-)
 
-// version is the CLI version, defaulting to "dev" and overridden at build time
-// via -ldflags "-X main.version=<tag>".
-var version = "dev"
+	"why/internal/evidence"
+)
 
 const usageText = `why - diagnose why a binary, process, or system is misbehaving
 
 Usage:
   why run [--json] [--rdr <path>] [--] <target> [args...]
   why inspect [--json] [--] <target>
-  why doctor [--] <target>
-  why report [--json] [--] <target>
+  why doctor
+  why report [--json] [--] <target-or-.rdr>
   why version
 
 Commands:
   run       Run diagnostics on a target
   inspect   Inspect a target in detail
   doctor    Check the environment for prerequisites
-  report    Produce a report on a target
+  report    Produce a report on a target (or from a recorded .rdr log)
   version   Print version information
 `
 
@@ -49,7 +47,7 @@ func run(args []string) int {
 	case "report":
 		return runReport(args[1:])
 	case "version":
-		fmt.Println("why " + version)
+		fmt.Println("why " + evidence.Version)
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "why: unknown command %q\n\n%s", args[0], usageText)
@@ -105,14 +103,20 @@ func parseFlags(args []string, bits flagBits) (jsonOut bool, rdrPath string, res
 	return jsonOut, rdrPath, rest, nil
 }
 
-// runRun parses the `run` subcommand's flags and dispatches to the run pipeline.
+// runRun parses the `run` subcommand's flags and dispatches to the run
+// pipeline. A completed run maps the diagnosis count to exit 0 or 2; a why
+// tool failure exits 1.
 func runRun(args []string) int {
 	jsonOut, rdrPath, rest, err := parseFlags(args, flagJSON|flagRDR)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "why: run: %v\n", err)
 		return 1
 	}
-	return exitCodeOf(runStub(rest, jsonOut, rdrPath))
+	n, err := runPipeline(rest, jsonOut, rdrPath)
+	if err != nil {
+		return exitCodeOf(err)
+	}
+	return exitCode(n)
 }
 
 // runInspect parses the `inspect` subcommand's flags and dispatches to the
@@ -123,7 +127,8 @@ func runInspect(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: inspect: %v\n", err)
 		return 1
 	}
-	return exitCodeOf(inspectStub(rest, jsonOut))
+	_, err = inspectPipeline(rest, jsonOut)
+	return exitCodeOf(err)
 }
 
 // runDoctor parses the `doctor` subcommand's flags (none accepted) and
@@ -134,7 +139,8 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: doctor: %v\n", err)
 		return 1
 	}
-	return exitCodeOf(doctorStub(rest))
+	_, err = doctorPipeline(rest)
+	return exitCodeOf(err)
 }
 
 // runReport parses the `report` subcommand's flags and dispatches to the
@@ -145,7 +151,11 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "why: report: %v\n", err)
 		return 1
 	}
-	return exitCodeOf(reportStub(rest, jsonOut))
+	n, err := reportPipeline(rest, jsonOut)
+	if err != nil {
+		return exitCodeOf(err)
+	}
+	return exitCode(n)
 }
 
 // exitError is a why tool failure: it implements error and carries the
@@ -191,40 +201,4 @@ func exitCodeOf(err error) int {
 		return ee.ExitCode()
 	}
 	return 1
-}
-
-// runStub is the placeholder run pipeline. A missing target is a why tool
-// failure (exit 1 via *exitError); a present target returns nil — a
-// completed report with no diagnosis (exit 0). The real pipeline lands in a
-// later change and will map the diagnosis count through exitCode (0/2).
-func runStub(rest []string, jsonOut bool, rdrPath string) error {
-	if len(rest) == 0 {
-		return &exitError{code: 1, msg: "why: run: missing target"}
-	}
-	return nil
-}
-
-// inspectStub is the placeholder inspect pipeline: a missing target is a why
-// tool failure (exit 1), a present target a completed inspection (exit 0).
-func inspectStub(rest []string, jsonOut bool) error {
-	if len(rest) == 0 {
-		return &exitError{code: 1, msg: "why: inspect: missing target"}
-	}
-	return nil
-}
-
-// doctorStub is the placeholder doctor pipeline. doctor takes no target; the
-// real self-diagnostics land in a later change and return exit 0 (all ok) or
-// 1 (a problem found).
-func doctorStub(rest []string) error {
-	return nil
-}
-
-// reportStub is the placeholder report pipeline: a missing target is a why
-// tool failure (exit 1), a present target a completed report (exit 0).
-func reportStub(rest []string, jsonOut bool) error {
-	if len(rest) == 0 {
-		return &exitError{code: 1, msg: "why: report: missing target"}
-	}
-	return nil
 }

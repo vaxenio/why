@@ -23,13 +23,16 @@ const (
 	EventStartFailed   EventType = "start.failed"
 	EventExit          EventType = "exit"
 	EventGraphSnapshot EventType = "graph.snapshot"
+	EventEnvSnapshot   EventType = "env.snapshot"
+	EventOutput        EventType = "target.output"
 )
 
 // Valid reports whether et is a known event type in schema version 1.0.
 func (et EventType) Valid() bool {
 	switch et {
 	case EventProcessStart, EventModuleLoaded, EventSearchFailed,
-		EventLoaderError, EventStartFailed, EventExit, EventGraphSnapshot:
+		EventLoaderError, EventStartFailed, EventExit, EventGraphSnapshot,
+		EventEnvSnapshot, EventOutput:
 		return true
 	}
 	return false
@@ -230,10 +233,43 @@ func (e Exit) validate() error {
 	return kindIs(e.Kind, EventExit, "Exit")
 }
 
+// Output records captured target stdout/stderr. The tracer captures the
+// tail of each stream (bounded; see the platform tracers) so rules like
+// port-in-use and missing-env-var can ground their claims in what the
+// target itself printed. Lines are emitted in order; Truncated is true when
+// earlier output was dropped to stay within the capture bound.
+type Output struct {
+	Common
+	Stream    string   `json:"stream"` // "stdout" or "stderr"
+	Lines     []string `json:"lines"`
+	Truncated bool     `json:"truncated"`
+}
+
+// validate enforces schema-v1.0 invariants for Output.
+func (e Output) validate() error {
+	if err := e.Common.validate(); err != nil {
+		return err
+	}
+	if err := kindIs(e.Kind, EventOutput, "Output"); err != nil {
+		return err
+	}
+	if e.Stream != "stdout" && e.Stream != "stderr" {
+		return fmt.Errorf("event: Output has stream %q, want \"stdout\" or \"stderr\"", e.Stream)
+	}
+	return nil
+}
+
 // Node is one node of the static dependency graph carried by GraphSnapshot.
 type Node struct {
 	Module string `json:"module"`
 	Status string `json:"status"`
+	// Source is where the module resolved from ("appdir", "system", "path",
+	// "rpath", "ldpath", ...). Empty when the producing inspector did not
+	// record it.
+	Source string `json:"source,omitempty"`
+	// Arch is the machine/class of a resolved dependency, used to detect
+	// wrong-arch dependencies. Empty when unknown.
+	Arch string `json:"arch,omitempty"`
 }
 
 // GraphSnapshot records the static dependency graph of the target so the
@@ -241,11 +277,14 @@ type Node struct {
 // binary. Kind is the graph kind ("pe" or "elf"); the event's discriminant is
 // carried separately by Common.Kind under the JSON name event_type. The outer
 // Kind field shadows Common.Kind for selector access, so the discriminant is
-// always read as Common.Kind.
+// always read as Common.Kind. Machine/Class carry the target's machine and
+// class so wrong-arch analysis works offline without the binary.
 type GraphSnapshot struct {
 	Common
-	Kind  string `json:"kind"`
-	Nodes []Node `json:"nodes"`
+	Kind    string `json:"kind"`
+	Machine string `json:"machine,omitempty"`
+	Class   string `json:"class,omitempty"`
+	Nodes   []Node `json:"nodes"`
 }
 
 // validate enforces schema-v1.0 invariants for GraphSnapshot.
@@ -287,6 +326,10 @@ func Validate(e Event) error {
 	case Exit:
 		return v.validate()
 	case GraphSnapshot:
+		return v.validate()
+	case EnvSnapshot:
+		return v.validate()
+	case Output:
 		return v.validate()
 	case nil:
 		return errors.New("event: nil event")

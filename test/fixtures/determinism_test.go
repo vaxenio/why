@@ -27,6 +27,7 @@ import (
 const (
 	machineAmd64 = 0x8664 // IMAGE_FILE_MACHINE_AMD64
 	machineI386  = 0x14c  // IMAGE_FILE_MACHINE_I386
+	machineArm64 = 0xAA64 // IMAGE_FILE_MACHINE_ARM64
 )
 
 // peFixture is a PE golden rebuilt with `go build` on a Windows host.
@@ -41,13 +42,19 @@ var peFixtures = []peFixture{
 	{"hello-x86.exe", "386", "hello.go"},
 	{"wrong-arch.exe", "386", "hello.go"},
 	{"missing-dll-x64.exe", "amd64", "missing_dll.go"},
+	{"wrong-arch-arm64.exe", "arm64", "hello.go"},
+	{"port-bind.exe", "amd64", "port_bind.go"},
+	{"cwd-check.exe", "amd64", "cwd_check.go"},
+	{"env-check.exe", "amd64", "env_check.go"},
 }
 
-// elfFixture is an ELF golden; goarch names the generator arch for
-// go-built ones, synthetic marks the byte-builder fixtures.
+// elfFixture is an ELF golden; goarch names the GOARCH for go-built ones,
+// src the build source ("" = hello.go); synthetic marks the byte-builder
+// fixtures.
 type elfFixture struct {
 	name        string
-	goarch      string // non-empty: go build from src/hello.go
+	goarch      string // non-empty: go build for this GOARCH
+	src         string // go build source under src/; "" = hello.go
 	synthetic   bool   // emitted by src/generate_elfs.go
 	wantClass   elf.Class
 	wantMachine elf.Machine
@@ -56,11 +63,14 @@ type elfFixture struct {
 }
 
 var elfFixtures = []elfFixture{
-	{"hello-linux-x86_64", "amd64", false, elf.ELFCLASS64, elf.EM_X86_64, "", nil},
-	{"wrong-arch-linux", "386", false, elf.ELFCLASS32, elf.EM_386, "", nil},
-	{"missing-so", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/lib64/ld-linux-x86-64.so.2", []string{"libdefinitelymissing.so.1"}},
-	{"bad-interp", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/nonexistent/ld-linux-why.so", []string{"libc.so.6"}},
-	{"musl-hello", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/lib/ld-musl-x86_64.so.1", []string{"libc.musl-x86_64.so.1"}},
+	{"hello-linux-x86_64", "amd64", "", false, elf.ELFCLASS64, elf.EM_X86_64, "", nil},
+	{"wrong-arch-linux", "386", "", false, elf.ELFCLASS32, elf.EM_386, "", nil},
+	{"missing-so", "", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/lib64/ld-linux-x86-64.so.2", []string{"libdefinitelymissing.so.1"}},
+	{"bad-interp", "", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/nonexistent/ld-linux-why.so", []string{"libc.so.6"}},
+	{"musl-hello", "", "", true, elf.ELFCLASS64, elf.EM_X86_64, "/lib/ld-musl-x86_64.so.1", []string{"libc.musl-x86_64.so.1"}},
+	{"port-bind", "amd64", "port_bind.go", false, elf.ELFCLASS64, elf.EM_X86_64, "", nil},
+	{"cwd-check", "amd64", "cwd_check.go", false, elf.ELFCLASS64, elf.EM_X86_64, "", nil},
+	{"env-check", "amd64", "env_check.go", false, elf.ELFCLASS64, elf.EM_X86_64, "", nil},
 }
 
 func Test_FixtureDeterminism_rebuildsHostBuildableFixtures(t *testing.T) {
@@ -122,10 +132,14 @@ func rebuildELF(t *testing.T, root, tmp string) {
 			out = filepath.Join(tmp, f.name)
 		} else {
 			out = filepath.Join(tmp, f.name)
+			src := f.src
+			if src == "" {
+				src = "hello.go"
+			}
 			cmd := exec.Command("go", "build",
 				"-trimpath", "-ldflags=-buildid=", "-buildvcs=false",
 				"-o", out,
-				filepath.Join(root, "test", "fixtures", "src", "hello.go"))
+				filepath.Join(root, "test", "fixtures", "src", src))
 			cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+f.goarch, "CGO_ENABLED=0")
 			if outBytes, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("rebuild %s: %v\n%s", f.name, err, outBytes)

@@ -1,0 +1,6 @@
+# Shell scripts must always be LF even on Windows checkouts — they run on
+# Linux CI (scripts/build.sh, scripts/release.sh).
+*.sh text eol=lf
+
+# Deterministic fixture binaries are test inputs; never treat as text.
+test/fixtures/bin/* binary

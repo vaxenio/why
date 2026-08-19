@@ -32,6 +32,7 @@ func TestEventTypeValid(t *testing.T) {
 	all := []EventType{
 		EventProcessStart, EventModuleLoaded, EventSearchFailed,
 		EventLoaderError, EventStartFailed, EventExit, EventGraphSnapshot,
+		EventEnvSnapshot, EventOutput,
 	}
 	for _, et := range all {
 		if !et.Valid() {
@@ -43,11 +44,20 @@ func TestEventTypeValid(t *testing.T) {
 	}
 }
 
-// TestEnvSnapshotNotYetDefined guards the wave-2 contract: env.snapshot is
-// introduced by a later todo and must NOT be a known event type yet.
-func TestEnvSnapshotNotYetDefined(t *testing.T) {
-	if EventType("env.snapshot").Valid() {
-		t.Error(`EventType("env.snapshot").Valid() = true, want false until env.snapshot lands`)
+// TestEnvSnapshotAndOutputEventTypes pins the schema-v1.0 event set added by
+// the v0.1 evidence model: env.snapshot (serialized Env for offline report
+// rebuild) and target.output (captured stdout/stderr tail).
+func TestEnvSnapshotAndOutputEventTypes(t *testing.T) {
+	for _, et := range []EventType{EventEnvSnapshot, EventOutput} {
+		if !et.Valid() {
+			t.Errorf("EventType %q: Valid() = false, want true", et)
+		}
+	}
+	if got := EventEnvSnapshot; got != "env.snapshot" {
+		t.Errorf("EventEnvSnapshot = %q, want %q", got, "env.snapshot")
+	}
+	if got := EventOutput; got != "target.output" {
+		t.Errorf("EventOutput = %q, want %q", got, "target.output")
 	}
 }
 
@@ -92,7 +102,9 @@ func TestRoundTrip(t *testing.T) {
 		{"loader.error", LoaderError{Common{EventLoaderError, now, SourceTrace}, `C:\app\foo.dll`, "parse failed"}},
 		{"start.failed", StartFailed{Common{EventStartFailed, now, SourceCLI}, 740, "The requested operation requires elevation."}},
 		{"exit", Exit{Common{EventExit, now, SourceTrace}, 0, 0}},
-		{"graph.snapshot", GraphSnapshot{Common{EventGraphSnapshot, now, SourceInspect}, "pe", []Node{{"kernel32.dll", "present"}, {"user32.dll", "missing"}}}},
+		{"graph.snapshot", GraphSnapshot{Common: Common{EventGraphSnapshot, now, SourceInspect}, Kind: "pe", Machine: "amd64", Class: "64", Nodes: []Node{{Module: "kernel32.dll", Status: "present"}, {Module: "user32.dll", Status: "missing"}}}},
+		{"env.snapshot", EnvSnapshot{Common: Common{EventEnvSnapshot, now, SourceEnv}, Env: Env{OS: "windows", Arch: "amd64"}}},
+		{"target.output", Output{Common: Common{EventOutput, now, SourceTrace}, Stream: "stderr", Lines: []string{"listen tcp :8080: bind: address already in use"}, Truncated: false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,7 +143,7 @@ func decodeJSON(t *testing.T, ev Event, b []byte) Event {
 // TestGraphSnapshotJSONFields pins the field-shadowing hazard: the graph's
 // own "kind" and the event discriminant "event_type" must both marshal.
 func TestGraphSnapshotJSONFields(t *testing.T) {
-	ev := GraphSnapshot{Common{EventGraphSnapshot, at(), SourceInspect}, "pe", []Node{{"a.dll", "present"}}}
+	ev := GraphSnapshot{Common: Common{EventGraphSnapshot, at(), SourceInspect}, Kind: "pe", Nodes: []Node{{Module: "a.dll", Status: "present"}}}
 	b, err := json.Marshal(ev)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +172,9 @@ func TestValidateAccepts(t *testing.T) {
 		LoaderError{Common{EventLoaderError, now, SourceTrace}, "foo.dll", "parse failed"},
 		StartFailed{Common{EventStartFailed, now, SourceCLI}, 740, "elevation required"},
 		Exit{Common{EventExit, now, SourceTrace}, 1, 0},
-		GraphSnapshot{Common{EventGraphSnapshot, now, SourceInspect}, "pe", []Node{{"kernel32.dll", "present"}}},
+		GraphSnapshot{Common: Common{EventGraphSnapshot, now, SourceInspect}, Kind: "pe", Nodes: []Node{{Module: "kernel32.dll", Status: "present"}}},
+		EnvSnapshot{Common: Common{EventEnvSnapshot, now, SourceEnv}, Env: Env{OS: "linux", Arch: "amd64"}},
+		Output{Common: Common{EventOutput, now, SourceTrace}, Stream: "stdout", Lines: []string{"hi"}, Truncated: true},
 	}
 	for _, ev := range valid {
 		if err := Validate(ev); err != nil {
@@ -184,9 +198,12 @@ func TestValidateRejects(t *testing.T) {
 		{"empty loader path", LoaderError{Common{EventLoaderError, now, SourceTrace}, "", "boom"}},
 		{"empty loader message", LoaderError{Common{EventLoaderError, now, SourceTrace}, "foo.dll", ""}},
 		{"empty start message", StartFailed{Common{EventStartFailed, now, SourceCLI}, 740, ""}},
-		{"empty graph kind", GraphSnapshot{Common{EventGraphSnapshot, now, SourceInspect}, "", nil}},
-		{"empty node module", GraphSnapshot{Common{EventGraphSnapshot, now, SourceInspect}, "pe", []Node{{"", "present"}}}},
-		{"empty node status", GraphSnapshot{Common{EventGraphSnapshot, now, SourceInspect}, "pe", []Node{{"kernel32.dll", ""}}}},
+		{"empty graph kind", GraphSnapshot{Common: Common{EventGraphSnapshot, now, SourceInspect}, Kind: ""}},
+		{"empty node module", GraphSnapshot{Common: Common{EventGraphSnapshot, now, SourceInspect}, Kind: "pe", Nodes: []Node{{Module: "", Status: "present"}}}},
+		{"empty node status", GraphSnapshot{Common: Common{EventGraphSnapshot, now, SourceInspect}, Kind: "pe", Nodes: []Node{{Module: "kernel32.dll", Status: ""}}}},
+		{"env snapshot empty os", EnvSnapshot{Common: Common{EventEnvSnapshot, now, SourceEnv}, Env: Env{Arch: "amd64"}}},
+		{"env snapshot empty arch", EnvSnapshot{Common: Common{EventEnvSnapshot, now, SourceEnv}, Env: Env{OS: "windows"}}},
+		{"output invalid stream", Output{Common: Common{EventOutput, now, SourceTrace}, Stream: "journald", Lines: nil}},
 		{"nil event", nil},
 		{"unknown concrete type", fakeEvent{Common{EventProcessStart, now, SourceTrace}}},
 	}

@@ -30,11 +30,16 @@ const (
 
 // Node is one vertex of the dependency graph. Module is the target path, the
 // resolved absolute path of a found dependency, the soname of a missing
-// dependency, or the interpreter path for an interpreter node. The shape
-// mirrors evidence.Node (module/status) so the graph serializes directly.
+// dependency, or the interpreter path for an interpreter node. Source is how
+// a found dependency resolved ("literal", "rpath", "rpath-inherited",
+// "ldpath", "runpath", "system"); Arch is the dependency's e_machine name.
+// The shape mirrors evidence.Node (module/status) so the graph serializes
+// directly.
 type Node struct {
 	Module string `json:"module"`
 	Status Status `json:"status"`
+	Source string `json:"source,omitempty"`
+	Arch   string `json:"arch,omitempty"`
 }
 
 // Edge is a directed dependency edge {from, to} using the node Modules.
@@ -130,7 +135,7 @@ func Inspect(path string, opts Options) (*Graph, error) {
 		ins.seen[abs] = true // a dep pointing back at the target is a cycle
 	}
 
-	ins.addNode(root.path, StatusPresent)
+	ins.addNode(root.path, StatusPresent, "target", root.arch)
 	if root.interp != "" {
 		ins.addInterp(root)
 	}

@@ -5,14 +5,13 @@ package trace
 
 import (
 	"errors"
-	"runtime"
 
 	"why/internal/evidence"
 )
 
-// ErrUnsupportedPlatform is returned by New when the platform tracer for the
-// current GOOS is not yet implemented. It is a typed sentinel so callers can
-// distinguish "no tracer for this platform" from a trace-time failure.
+// ErrUnsupportedPlatform is returned when no tracer exists for the current
+// GOOS. It is a typed sentinel so callers can distinguish "no tracer for
+// this platform" from a trace-time failure.
 var ErrUnsupportedPlatform = errors.New("trace: platform tracer not implemented for this GOOS")
 
 // # Seam: Windows LdrLoadDll hooking (v0.2 — NOT implemented in v0.1)
@@ -40,11 +39,19 @@ var ErrUnsupportedPlatform = errors.New("trace: platform tracer not implemented 
 //
 // Tracer runs a target process and records the ordered sequence of
 // diagnostic events produced during execution.
+//
+// Run's error semantics are part of the contract: a non-nil error is
+// returned ONLY when tracing itself fails (a LoaderError event is recorded
+// first). A target that fails to start is NOT a tracing failure — it is a
+// diagnosable outcome recorded as a StartFailed event, and Run returns nil
+// so the rule engine can diagnose it. This keeps why's exit code distinct:
+// a target-side problem yields diagnoses (exit 2), a tracer failure is a why
+// tool failure (exit 1).
 type Tracer interface {
-	// Run executes the target process, blocking until it exits. A non-nil
-	// error is returned when the process cannot be started (the tracer
-	// records a StartFailed event) or when tracing itself fails (a
-	// LoaderError event is recorded first).
+	// Run executes the target process, blocking until it exits or tracing
+	// fails. On a tracer failure it records a LoaderError event and returns
+	// a non-nil error; a target that cannot start records a StartFailed
+	// event and returns nil.
 	Run() error
 
 	// Stop requests termination of a running trace and its target. It is
@@ -57,25 +64,8 @@ type Tracer interface {
 	Events() []evidence.Event
 }
 
-// New returns the Tracer for the current host, selected per GOOS. The
-// platform tracers land in later waves (internal/platform/windows for
-// Windows, internal/platform/linux for Linux); until they do, New returns
-// ErrUnsupportedPlatform on every GOOS.
-func New() (Tracer, error) {
-	switch runtime.GOOS {
-	case "windows":
-		return newWindows()
-	case "linux":
-		return newLinux()
-	default:
-		return nil, ErrUnsupportedPlatform
-	}
-}
-
-// newWindows returns the Windows tracer. Not implemented until the
-// debugger-mode tracer lands (T13).
-func newWindows() (Tracer, error) { return nil, ErrUnsupportedPlatform }
-
-// newLinux returns the Linux tracer. Not implemented until the LD_DEBUG
-// tracer lands (T15).
-func newLinux() (Tracer, error) { return nil, ErrUnsupportedPlatform }
+// The per-GOOS tracer factory lives in cmd/why (build-tagged os_windows.go /
+// os_linux.go), not here, so this package can define the Tracer interface
+// without importing the platform implementations (which in turn import the
+// interface — a cycle). cmd selects the platform tracer and returns
+// ErrUnsupportedPlatform on an unsupported GOOS.

@@ -1,7 +1,6 @@
 package trace
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -31,18 +30,12 @@ func (s *stubTracer) Events() []evidence.Event {
 // method set (Run/Stop/Events) the platform tracers must implement.
 var _ Tracer = (*stubTracer)(nil)
 
-// TestNewReturnsTypedError covers the nil-tracer path: until the platform
-// tracers land, New must return a typed error and must not panic.
-func TestNewReturnsTypedError(t *testing.T) {
-	tr, err := New()
-	if tr != nil {
-		t.Errorf("New() tracer = %v, want nil (no platform tracer yet)", tr)
-	}
-	if err == nil {
-		t.Fatal("New() error = nil, want ErrUnsupportedPlatform")
-	}
-	if !errors.Is(err, ErrUnsupportedPlatform) {
-		t.Errorf("New() error = %v, want errors.Is(err, ErrUnsupportedPlatform)", err)
+// TestErrUnsupportedPlatformIsTyped pins the sentinel the cmd factory
+// returns on unsupported GOOS, so callers can distinguish "no tracer for
+// this platform" from a trace-time failure.
+func TestErrUnsupportedPlatformIsTyped(t *testing.T) {
+	if ErrUnsupportedPlatform.Error() == "" {
+		t.Error("ErrUnsupportedPlatform has empty message")
 	}
 }
 

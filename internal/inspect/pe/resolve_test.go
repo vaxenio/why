@@ -325,14 +325,14 @@ func TestGroupImports(t *testing.T) {
 }
 
 func TestDedup(t *testing.T) {
-	got := dedup([]string{"a", "b", "a", "", "c", "b"})
-	want := []string{"a", "b", "c"}
+	got := dedup([]searchDir{{"a", "path"}, {"b", "path"}, {"a", "appdir"}, {"", "path"}, {"c", "path"}, {"b", "system"}})
+	want := []string{"a", "b", "c"} // first-seen path wins; empty dropped
 	if len(got) != len(want) {
 		t.Fatalf("dedup = %v, want %v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("dedup[%d] = %q, want %q", i, got[i], want[i])
+		if got[i].path != want[i] {
+			t.Errorf("dedup[%d].path = %q, want %q", i, got[i].path, want[i])
 		}
 	}
 }

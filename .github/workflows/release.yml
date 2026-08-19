@@ -1,0 +1,39 @@
+# release.yml — cut a GitHub release from a `v*` tag.
+#
+# Trigger: push a tag like `v0.1.0` (`git tag v0.1.0 && git push --tags`).
+# Builds the Windows x64 and Linux x64 release binaries with the tag version
+# stamped, verifies the Linux binary on this host, and publishes the assets
+# (binaries + SHA256SUMS) as a GitHub release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build release artifacts
+        run: ./scripts/build.sh "${{ github.ref_name }}"
+
+      - name: verify linux binary
+        run: |
+          chmod +x ./dist/why-${{ github.ref_name }}-linux-amd64
+          ./dist/why-${{ github.ref_name }}-linux-amd64 version | grep "${{ github.ref_name }}"
+          ./dist/why-${{ github.ref_name }}-linux-amd64 doctor
+
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

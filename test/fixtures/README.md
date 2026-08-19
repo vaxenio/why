@@ -19,25 +19,35 @@ test/fixtures/
 ├── src/
 │   ├── hello.go             source of every "healthy" fixture (PE + ELF)
 │   ├── missing_dll.go       source of missing-dll-x64.exe (PE import-table trick)
+│   ├── port_bind.go         source of port-bind.exe / port-bind (EADDRINUSE fixture)
+│   ├── cwd_check.go         source of cwd-check.exe / cwd-check (relative-path fixture)
+│   ├── env_check.go         source of env-check.exe / env-check (env-var fixture)
 │   └── generate_elfs.go     synthetic ELF byte-builder (missing-so, bad-interp, musl-hello)
 └── determinism_test.go      host-aware rebuild + byte-compare + parse asserts
 ```
 
 ## Fixture inventory
 
-All sha256 hashes are for the committed bytes (2026-08-18).
+All sha256 hashes are for the committed bytes (2026-08-18/19).
 
 | Fixture | Format | Size | sha256 | Purpose |
 | --- | --- | --- | --- | --- |
 | `bin/hello-x64.exe` | PE32+ amd64 | 2457088 | `985289d6…44baf` | healthy x64 PE; imports kernel32.dll only |
 | `bin/hello-x86.exe` | PE32 i386 | 2309120 | `52055f6e…410cf` | healthy 32-bit PE (same source, GOARCH=386) |
 | `bin/wrong-arch.exe` | PE32 i386 | 2309120 | `52055f6e…410cf` | x86 binary inspected/traced from an x64 context (byte-identical to hello-x86.exe) |
+| `bin/wrong-arch-arm64.exe` | PE32+ arm64 | 2313216 | `ff57ea31…8ab18` | arm64 PE that cannot run on an amd64 host -> real wrong-arch diagnosis (the x86 fixture runs via WOW64, this one fails) |
 | `bin/missing-dll-x64.exe` | PE32+ amd64 | 2472448 | `666b1492…84e2b` | import table names the absent `DefinitelyMissing.dll` -> loader fails at start (STATUS_DLL_NOT_FOUND) |
+| `bin/port-bind.exe` | PE32+ amd64 | 3416576 | `5b697d33…2c350` | binds TCP 127.0.0.1:`<port>` twice; second bind must fail EADDRINUSE -> bind error on stderr, exit 1 (no port arg: exit 3; first-bind failure: exit 2) |
+| `bin/cwd-check.exe` | PE32+ amd64 | 2479616 | `576231a9…8fd70` | opens the relative path `why_config.json`; absent -> `open why_config.json: <err>` on stderr, exit 1 (present -> `ok`, exit 0) |
+| `bin/env-check.exe` | PE32+ amd64 | 2477568 | `cc2e965a…321d3` | reads `WHY_TEST_VAR`; unset -> `environment variable WHY_TEST_VAR is not set` on stderr, exit 1 (set -> `WHY_TEST_VAR is set to <value>`, exit 0) |
 | `bin/hello-linux-x86_64` | ELF64 x86-64 | 2392466 | `ad577528…bf26e` | healthy static ELF (no PT_INTERP, no DT_NEEDED) |
 | `bin/wrong-arch-linux` | ELF32 i386 | 2231624 | `78b8fdfd…8d63` | 32-bit ELF inspected on an amd64 host |
 | `bin/missing-so` | ELF64 x86-64 | 635 | `d1627e6a…42f69` | dynamic ELF: PT_INTERP present, DT_NEEDED `libdefinitelymissing.so.1` (absent) |
 | `bin/bad-interp` | ELF64 x86-64 | 620 | `c40d6695…89b04` | PT_INTERP `/nonexistent/ld-linux-why.so` (never present), DT_NEEDED `libc.so.6` |
 | `bin/musl-hello` | ELF64 x86-64 | 628 | `8d6574ba…c65a5` | musl-shaped: PT_INTERP `/lib/ld-musl-x86_64.so.1` + DT_NEEDED `libc.musl-x86_64.so.1` |
+| `bin/port-bind` | ELF64 x86-64 | 3275264 | `926a6c18…6c404` | same EADDRINUSE fixture as port-bind.exe, ELF variant |
+| `bin/cwd-check` | ELF64 x86-64 | 2395776 | `ee36891c…4e19b` | same relative-path fixture as cwd-check.exe, ELF variant |
+| `bin/env-check` | ELF64 x86-64 | 2412866 | `639ac64e…1ac50` | same env-var fixture as env-check.exe, ELF variant |
 | `bin/truncated-hello-x64.exe` | PE (broken) | 64 | `7be6712b…cb614` | first 64 bytes of hello-x64.exe (DOS header only, no PE signature) |
 | `bin/mangled-elf-magic` | ELF (broken) | 2392466 | `2c4967fa…d2c4a` | hello-linux-x86_64 with byte 0 flipped to 0x00 (magic corrupted) |
 
@@ -50,7 +60,7 @@ exists so tracers/inspectors have a distinctly named wrong-arch target.
 ## Pinned toolchain
 
 Determinism requires the exact toolchain the fixtures were built with
-(2026-08-18): **Go 1.26.5** (`go version go1.26.5 windows/amd64`).
+(2026-08-18/19): **Go 1.26.5** (`go version go1.26.5 windows/amd64`).
 
 ## Determinism flags
 
@@ -80,11 +90,18 @@ FLAGS="-trimpath -ldflags=-buildid= -buildvcs=false"
 GOOS=windows GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/hello-x64.exe test/fixtures/src/hello.go
 GOOS=windows GOARCH=386  go build $FLAGS -o test/fixtures/bin/hello-x86.exe test/fixtures/src/hello.go
 GOOS=windows GOARCH=386  go build $FLAGS -o test/fixtures/bin/wrong-arch.exe test/fixtures/src/hello.go
+GOOS=windows GOARCH=arm64 go build $FLAGS -o test/fixtures/bin/wrong-arch-arm64.exe test/fixtures/src/hello.go
 GOOS=windows GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/missing-dll-x64.exe test/fixtures/src/missing_dll.go
+GOOS=windows GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/port-bind.exe test/fixtures/src/port_bind.go
+GOOS=windows GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/cwd-check.exe test/fixtures/src/cwd_check.go
+GOOS=windows GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/env-check.exe test/fixtures/src/env_check.go
 
 # ELF fixtures (any host; GOOS=linux)
 GOOS=linux GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/hello-linux-x86_64 test/fixtures/src/hello.go
 GOOS=linux GOARCH=386  go build $FLAGS -o test/fixtures/bin/wrong-arch-linux test/fixtures/src/hello.go
+GOOS=linux GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/port-bind test/fixtures/src/port_bind.go
+GOOS=linux GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/cwd-check test/fixtures/src/cwd_check.go
+GOOS=linux GOARCH=amd64 go build $FLAGS -o test/fixtures/bin/env-check test/fixtures/src/env_check.go
 
 # Synthetic ELFs (any host; byte-builder)
 go run ./test/fixtures/src/generate_elfs.go test/fixtures/bin
@@ -96,11 +113,11 @@ cp test/fixtures/bin/hello-linux-x86_64 test/fixtures/bin/mangled-elf-magic && p
 
 The host-aware gate is `test/fixtures/determinism_test.go`:
 
-- **Windows host**: rebuilds the 4 PE fixtures and byte-compares; skips ELF
-  rebuilds with an explicit `t.Log` and parse-asserts the 5 ELF fixtures.
-- **Linux host**: rebuilds the 5 ELF fixtures (2 via `go build`, 3 via the
+- **Windows host**: rebuilds the 8 PE fixtures and byte-compares; skips ELF
+  rebuilds with an explicit `t.Log` and parse-asserts the 8 ELF fixtures.
+- **Linux host**: rebuilds the 8 ELF fixtures (5 via `go build`, 3 via the
   byte-builder) and byte-compares; skips PE rebuilds with an explicit
-  `t.Log` and parse-asserts the PE fixtures.
+  `t.Log` and parse-asserts the 8 PE fixtures.
 - **Any host**: malformed fixtures are asserted as static bytes (truncated
   PE must lack the PE signature; mangled ELF must be rejected by
   `debug/elf`).

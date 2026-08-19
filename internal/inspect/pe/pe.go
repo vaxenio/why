@@ -11,6 +11,7 @@
 package pe
 
 import (
+	"debug/pe"
 	"os"
 	"path/filepath"
 )
@@ -29,11 +30,15 @@ const (
 
 // Node is one vertex of the dependency graph. Module is the target path or
 // the resolved absolute path of a found DLL, or the DLL name of a missing
-// one. The shape mirrors evidence.Node (module/status) so the graph
+// one. Source is where a found DLL resolved from ("known", "appdir",
+// "system", "cwd", "path", "searchdirs") and Arch is the DLL's machine when
+// it parses. The shape mirrors evidence.Node (module/status) so the graph
 // serializes directly.
 type Node struct {
 	Module string `json:"module"`
 	Status Status `json:"status"`
+	Source string `json:"source,omitempty"`
+	Arch   string `json:"arch,omitempty"`
 }
 
 // Edge is a directed dependency edge {from, to} using the node Modules.
@@ -135,12 +140,15 @@ func Inspect(path string, opts Options) (*Graph, error) {
 	edgeSet := map[Edge]bool{}
 	for _, imp := range root.imports {
 		module, status := imp.DLL, StatusMissing
-		if resolved, ok := r.resolve(imp.DLL); ok {
+		var source, arch string
+		if resolved, src, ok := r.resolve(imp.DLL); ok {
 			module, status = resolved, StatusPresent
+			source = src
+			arch = machineOf(resolved)
 		}
 		if !seen[module] {
 			seen[module] = true
-			g.Nodes = append(g.Nodes, Node{Module: module, Status: status})
+			g.Nodes = append(g.Nodes, Node{Module: module, Status: status, Source: source, Arch: arch})
 		}
 		e := Edge{path, module}
 		if !edgeSet[e] {
@@ -149,6 +157,18 @@ func Inspect(path string, opts Options) (*Graph, error) {
 		}
 	}
 	return g, nil
+}
+
+// machineOf opens path and returns its PE machine name, or "" when the file
+// is not a parseable PE image (a dependency-level problem, never an error
+// here).
+func machineOf(path string) string {
+	f, err := pe.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	return machineName(f.Machine)
 }
 
 // systemRoot returns the effective Windows directory for opts.

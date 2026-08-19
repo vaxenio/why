@@ -153,6 +153,10 @@ func MarshalEvent(e Event) ([]byte, error) {
 		return json.Marshal(v)
 	case GraphSnapshot:
 		return json.Marshal(v)
+	case EnvSnapshot:
+		return json.Marshal(v)
+	case Output:
+		return json.Marshal(v)
 	default:
 		return nil, fmt.Errorf("event: cannot marshal event of type %T", e)
 	}
@@ -185,6 +189,10 @@ func UnmarshalEvent(line []byte) (Event, error) {
 		return unmarshalTyped[Exit](line)
 	case EventGraphSnapshot:
 		return unmarshalTyped[GraphSnapshot](line)
+	case EventEnvSnapshot:
+		return unmarshalTyped[EnvSnapshot](line)
+	case EventOutput:
+		return unmarshalTyped[Output](line)
 	default:
 		return nil, fmt.Errorf("event: unknown event_type %q", probe.EventType)
 	}

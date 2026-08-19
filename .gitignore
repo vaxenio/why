@@ -1,6 +1,7 @@
 # Build artifacts
 *.exe
 /bin
+/dist
 
 # Trace files
 *.rdr

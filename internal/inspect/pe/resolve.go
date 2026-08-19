@@ -8,11 +8,19 @@ import (
 	"strings"
 )
 
+// searchDir is one directory in the search order plus the source label that
+// identifies why the loader would pick a DLL from it (used by the
+// path-conflict diagnosis).
+type searchDir struct {
+	path   string
+	source string
+}
+
 // resolver holds the precomputed search state for one Inspect call.
 type resolver struct {
 	known     map[string]bool // lowercase DLL names in the KnownDLLs list
 	systemDir string          // machine-appropriate system directory
-	dirs      []string        // deduplicated search dirs after the KnownDLL step
+	dirs      []searchDir     // search dirs after the KnownDLL step, in order
 }
 
 // newResolver builds the search state for target on machine. The search
@@ -37,38 +45,43 @@ func newResolver(target, machine string, opts Options) *resolver {
 		known[strings.ToLower(filepath.Base(d))] = true
 	}
 
-	dirs := []string{filepath.Dir(target), systemDir}
+	var dirs []searchDir
+	dirs = append(dirs, searchDir{filepath.Dir(target), "appdir"})
+	dirs = append(dirs, searchDir{systemDir, "system"})
 	if cwd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, cwd)
+		dirs = append(dirs, searchDir{cwd, "cwd"})
 	}
 	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
 		if p != "" {
-			dirs = append(dirs, p)
+			dirs = append(dirs, searchDir{p, "path"})
 		}
 	}
-	dirs = append(dirs, opts.SearchDirs...)
+	for _, d := range opts.SearchDirs {
+		dirs = append(dirs, searchDir{d, "searchdirs"})
+	}
 	return &resolver{known: known, systemDir: systemDir, dirs: dedup(dirs)}
 }
 
-// resolve finds dll on disk, returning the resolved absolute path. A DLL on
-// the KnownDLLs list is resolved from the system directory ONLY — KnownDLLs
-// never fall back to the application directory, CWD or PATH.
-func (r *resolver) resolve(dll string) (string, bool) {
+// resolve finds dll on disk, returning the resolved absolute path, the
+// source label of the directory it was found in, and whether it exists. A
+// DLL on the KnownDLLs list is resolved from the system directory ONLY —
+// KnownDLLs never fall back to the application directory, CWD or PATH.
+func (r *resolver) resolve(dll string) (path, source string, ok bool) {
 	name := filepath.Base(dll)
 	if r.known[strings.ToLower(name)] {
 		p := filepath.Join(r.systemDir, name)
 		if fileExists(p) {
-			return absPath(p), true
+			return absPath(p), "known", true
 		}
-		return "", false
+		return "", "", false
 	}
-	for _, dir := range r.dirs {
-		p := filepath.Join(dir, name)
+	for _, d := range r.dirs {
+		p := filepath.Join(d.path, name)
 		if fileExists(p) {
-			return absPath(p), true
+			return absPath(p), d.source, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // fileExists reports whether path names an existing file.
@@ -87,18 +100,19 @@ func absPath(path string) string {
 
 // dedup removes empty and duplicate directories, preserving first-seen
 // order.
-func dedup(dirs []string) []string {
+func dedup(dirs []searchDir) []searchDir {
 	seen := map[string]bool{}
 	out := dirs[:0]
 	for _, d := range dirs {
-		if d == "" {
+		if d.path == "" {
 			continue
 		}
-		d = filepath.Clean(d)
-		if seen[d] {
+		p := filepath.Clean(d.path)
+		if seen[p] {
 			continue
 		}
-		seen[d] = true
+		seen[p] = true
+		d.path = p
 		out = append(out, d)
 	}
 	return out

@@ -50,7 +50,7 @@ func goldenEvents() []Event {
 		LoaderError{Common{EventLoaderError, sec(4), SourceTrace}, "missing.so", "not found"},
 		StartFailed{Common{EventStartFailed, sec(5), SourceTrace}, 740, "requires elevation"},
 		Exit{Common{EventExit, sec(6), SourceTrace}, 1, 0},
-		GraphSnapshot{Common{EventGraphSnapshot, sec(7), SourceTrace}, "pe", []Node{{Module: "kernel32.dll", Status: "ok"}}},
+		GraphSnapshot{Common: Common{EventGraphSnapshot, sec(7), SourceTrace}, Kind: "pe", Nodes: []Node{{Module: "kernel32.dll", Status: "ok"}}},
 	}
 }
 
