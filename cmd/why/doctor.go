@@ -46,7 +46,7 @@ func doctorPipeline(rest []string) (int, error) {
 	checks = append(checks, platformChecks(env)...)
 
 	failures := 0
-	fmt.Printf("why doctor — %s/%s\n", env.OS, env.Arch)
+	fmt.Printf("why doctor -- %s/%s\n", env.OS, env.Arch)
 	for _, c := range checks {
 		mark := "[ok]"
 		if !c.ok {

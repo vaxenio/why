@@ -104,7 +104,7 @@ func renderInspectJSON(g any, kind evidence.Kind) error {
 }
 
 func renderInspectHuman(g any, kind evidence.Kind, target string) {
-	fmt.Printf("why inspect — %s\n", target)
+	fmt.Printf("why inspect -- %s\n", target)
 	switch v := g.(type) {
 	case *pe.Graph:
 		fmt.Printf("kind: pe   machine: %s   subsystem: %s\n", v.Machine, v.Subsystem)

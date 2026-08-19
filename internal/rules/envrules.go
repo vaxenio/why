@@ -135,7 +135,7 @@ func (*portInUse) Evaluate(ev *evidence.Evidence) (*diagnose.Diagnosis, bool) {
 		// No port in the message; bound the context to avoid noise.
 		for i, p := range ev.Env.Ports {
 			if i >= 5 {
-				listeners = append(listeners, "…")
+				listeners = append(listeners, "...")
 				break
 			}
 			owner := p.Owner
