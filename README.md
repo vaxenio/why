@@ -26,10 +26,10 @@ Why — the name says it all. Not *what failed*, not *where to look*. **Why.**
 
 ## Why WHY
 
-Running software that doesn't run is a daily ritual: a missing DLL, a 32-bit
-binary on a 64-bit machine, a wrong interpreter, a port already in use. The
-symptoms are everywhere, and the cause is usually a few concrete facts away —
-but finding those facts is tedious. WHY automates it:
+Running software that doesn't run is a daily ritual: a missing DLL, a binary
+built for the wrong architecture, a wrong interpreter, a port already in use.
+The symptoms are everywhere, and the cause is usually a few concrete facts
+away — but finding those facts is tedious. WHY automates it:
 
 - **Deterministic rules over real evidence.** Every diagnosis is grounded in
   something observed: a loader error code, a missing module in the dependency
@@ -48,13 +48,16 @@ the [Releases](https://github.com/vaxenio/why/releases) page, put it on your
 `PATH`, and verify:
 
 ```sh
-# Windows
+# Windows: rename the downloaded file to why.exe (or keep the full name),
+# put it on your PATH, then:
 why version        # -> why v0.1.0
 why doctor         # are this machine's prerequisites OK?
 
 # Linux
-./why-linux-amd64 version
-./why-linux-amd64 doctor
+chmod +x why-linux-amd64
+mv why-linux-amd64 /usr/local/bin/why
+why version        # -> why v0.1.0
+why doctor
 ```
 
 | Platform | Artifact |
@@ -63,7 +66,15 @@ why doctor         # are this machine's prerequisites OK?
 | Linux x64 | `why-v0.1.0-linux-amd64` |
 | Checksums | `why-v0.1.0-SHA256SUMS` |
 
-Verify the checksum: `sha256sum -c why-v0.1.0-SHA256SUMS`.
+Verify the checksum:
+
+```sh
+# Linux / macOS
+sha256sum -c why-v0.1.0-SHA256SUMS
+
+# Windows (PowerShell)
+Get-FileHash why-v0.1.0-windows-amd64.exe -Algorithm SHA256   # compare with the SHA256SUMS file
+```
 
 ## Four commands
 
