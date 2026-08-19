@@ -216,7 +216,52 @@ func (t *Tracer) Events() []evidence.Event {
 }
 
 // Run executes the target under the debugger, blocking until it exits.
+//
+// Attaching a debugger to a freshly created process is racy on Windows:
+// when debuggees are created back-to-back (e.g. `why run` in a loop, or
+// integration tests), the first WaitForDebugEvent can transiently fail to
+// receive the queued CREATE_PROCESS event, leaving the target suspended and
+// the session dead. Run retries the whole trace on that attach failure so
+// the caller sees a complete run instead of a spurious error.
 func (t *Tracer) Run() error {
+	const attempts = 3
+	var lastErr error
+	for i := range attempts {
+		if i > 0 {
+			// Give the previous debug session's port time to release.
+			// Attach failures cluster: a failed attempt means the system is
+			// mid-teardown, so back off increasingly.
+			time.Sleep(time.Duration(i) * 300 * time.Millisecond)
+		}
+		err := t.runOnce()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errAttachFailed) {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+// errAttachFailed marks a trace attempt that never attached to the target
+// (no debug event was ever delivered); it is retried by Run.
+var errAttachFailed = errors.New("trace: failed to attach debugger to target")
+
+// runOnce is one trace attempt: create the process, run the debug loop, and
+// return the result. An attempt that never receives a debug event returns
+// errAttachFailed after cleaning up; Run retries it.
+func (t *Tracer) runOnce() error {
+	// Each attempt is a fresh trace: a failed attempt's partial events and
+	// captured streams must not leak into the retry or the result.
+	t.mu.Lock()
+	t.events = nil
+	t.stdout = &streamBuf{}
+	t.stderr = &streamBuf{}
+	t.proc = 0
+	t.mu.Unlock()
+
 	outR, outW, err := os.Pipe()
 	if err != nil {
 		return t.tracerFail("create stdout pipe: " + err.Error())
@@ -269,30 +314,30 @@ func (t *Tracer) Run() error {
 	go copyStream(outR, t.stdout, outDone)
 	go copyStream(errR, t.stderr, errDone)
 
-	// complete ends a successful trace: drain the capture goroutines (so the
-	// Output events contain the target's full output — finalizing before the
-	// pipes hit EOF would drop everything a fast-exiting target printed),
-	// append the Output events, and release the process handle.
-	complete := func() error {
-		outR.Close()
-		errR.Close()
-		<-outDone
-		<-errDone
+	// complete ends a trace attempt: ensure the child is dead (so the capture
+	// goroutines reach EOF and the output is complete), append the Output
+	// events, release the process handle, and return ret.
+	complete := func(ret error) error {
+		windows.TerminateProcess(pi.Process, 1)
+		drainAndClose(outDone, outR)
+		drainAndClose(errDone, errR)
 		t.finalizeOutputs()
 		windows.CloseHandle(pi.Process)
 		t.mu.Lock()
 		t.proc = 0
 		t.mu.Unlock()
-		return nil
+		return ret
 	}
 	defer func() {
-		// Safety for early (error) returns: unblock the capture goroutines
-		// and release the process handle. On the complete() path these are
-		// idempotent (closed files, closed channels, closed handle).
-		outR.Close()
-		errR.Close()
-		<-outDone
-		<-errDone
+		// Safety for every return path. TerminateProcess first so the child's
+		// write ends close and the capture goroutines reach EOF; only then is
+		// it safe to close the read ends. Closing a read end while a Read is
+		// pending can deadlock or crash the Go runtime on Windows, so if the
+		// child refuses to die, leak the goroutine and the file instead of
+		// closing (the process is doomed anyway).
+		windows.TerminateProcess(pi.Process, 1)
+		drainAndClose(outDone, outR)
+		drainAndClose(errDone, errR)
 		windows.CloseHandle(pi.Process)
 		t.mu.Lock()
 		t.proc = 0
@@ -301,11 +346,15 @@ func (t *Tracer) Run() error {
 
 	wow64 := false
 	var de debugEvent
+	seenCreate := false
+	polls := 0
 	for {
 		ok, werr := waitForDebugEvent(&de, waitPoll)
 		if ok {
+			polls = 0
 			switch de.DebugEventCode {
 			case createProcessDebugEvent:
+				seenCreate = true
 				info := (*createProcessDebugInfo)(unsafe.Pointer(&de.U))
 				closeHandle(info.hFile)
 				closeHandle(info.hProcess)
@@ -323,7 +372,7 @@ func (t *Tracer) Run() error {
 				t.add(evidence.Exit{Common: common(evidence.EventExit, evidence.SourceTrace),
 					ExitCode: code, Signal: 0})
 				continueDebugEvent(de.ProcessID, de.ThreadID, dbgContinue)
-				return complete()
+				return complete(nil)
 			case exceptionDebugEvent:
 				// Continue the initial loader breakpoint; let every other
 				// first-chance exception reach the target (its exit status
@@ -345,24 +394,59 @@ func (t *Tracer) Run() error {
 		// No event within the poll window: either a timeout or a real
 		// failure. The debuggee-exit race means a terminated process may
 		// deliver no EXIT_PROCESS, so a missing/invalid session or a dead
-		// process is a completed trace, not a tracer failure.
+		// process is a completed trace, not a tracer failure — unless the
+		// process is stuck (the debugger never attached).
 		code := win32Code(werr)
 		switch {
 		case code == waitTimeout:
+			polls++
+			if !seenCreate && polls > 10 {
+				// No debug event within ~1s of creation: the debugger never
+				// attached (a known race when debuggees are created
+				// back-to-back). The target is suspended at the loader
+				// breakpoint; kill it and let Run retry.
+				windows.TerminateProcess(pi.Process, 1)
+				t.add(evidence.LoaderError{Common: common(evidence.EventLoaderError, evidence.SourceTrace),
+					Path: t.target, Message: "debugger did not attach; retrying"})
+				return complete(errAttachFailed)
+			}
+			if polls > 50 {
+				// No progress for ~5s even though the process was created:
+				// the debug session stalled (rare). Kill the target and let
+				// Run retry rather than surface a spurious error.
+				windows.TerminateProcess(pi.Process, 1)
+				t.add(evidence.LoaderError{Common: common(evidence.EventLoaderError, evidence.SourceTrace),
+					Path: t.target, Message: "debug session stalled; retrying"})
+				return complete(errAttachFailed)
+			}
 			if t.processGone(pi.Process) {
 				t.add(evidence.Exit{Common: common(evidence.EventExit, evidence.SourceTrace),
 					ExitCode: t.exitCode(pi.Process), Signal: 0})
-				return complete()
+				return complete(nil)
 			}
 			continue // still running: keep waiting
 		case code == errInvalidHandle:
+			// The debuggee terminated before we drained its events. If it
+			// really exited, GetExitCodeProcess yields its code; if it is
+			// stuck at the loader breakpoint (attach race), it stays
+			// STILL_ACTIVE and this attempt must be retried.
+			ex, alive := t.exitState(pi.Process)
+			if alive {
+				windows.TerminateProcess(pi.Process, 1)
+				t.add(evidence.LoaderError{Common: common(evidence.EventLoaderError, evidence.SourceTrace),
+					Path: t.target, Message: "debugger did not attach; retrying"})
+				return complete(errAttachFailed)
+			}
 			t.add(evidence.Exit{Common: common(evidence.EventExit, evidence.SourceTrace),
-				ExitCode: t.exitCode(pi.Process), Signal: 0})
-			return complete()
+				ExitCode: ex, Signal: 0})
+			return complete(nil)
 		default:
+			// Unexpected WaitForDebugEvent failure. The child may still be
+			// alive; kill it so the defer's pipe cleanup does not deadlock.
+			windows.TerminateProcess(pi.Process, 1)
 			t.add(evidence.LoaderError{Common: common(evidence.EventLoaderError, evidence.SourceTrace),
 				Path: t.target, Message: "debug session failed: " + winErr(code)})
-			return t.tracerFail(fmt.Sprintf("WaitForDebugEvent failed: %s", winErr(code)))
+			return complete(t.tracerFail(fmt.Sprintf("WaitForDebugEvent failed: %s", winErr(code))))
 		}
 	}
 }
@@ -408,21 +492,31 @@ type traceError struct{ msg string }
 
 func (e *traceError) Error() string { return "trace: " + e.msg }
 
-// exitCode returns the target's exit code via GetExitCodeProcess. During the
-// process-exit transition GetExitCodeProcess can transiently fail or report
-// STILL_ACTIVE, so it is retried briefly before giving up (0).
-func (t *Tracer) exitCode(proc windows.Handle) uint32 {
+// exitState returns the target's exit code and whether the process is still
+// alive (STILL_ACTIVE). A process stuck at the loader breakpoint after a
+// failed debugger attach stays STILL_ACTIVE forever; a process that really
+// exited yields its exit code within the retry window.
+func (t *Tracer) exitState(proc windows.Handle) (uint32, bool) {
 	for i := 0; i < 5; i++ {
 		var code uint32
 		r, _, _ := procGetExitCodeProcess.Call(uintptr(proc), uintptr(unsafe.Pointer(&code)))
 		if r != 0 && code != 259 { // STILL_ACTIVE
-			return code
+			return code, false
 		}
-		if i < 4 {
-			time.Sleep(10 * time.Millisecond)
-		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return 0
+	return 0, true
+}
+
+// exitCode returns the target's exit code via GetExitCodeProcess. During the
+// process-exit transition GetExitCodeProcess can transiently fail or report
+// STILL_ACTIVE, so it is retried briefly before giving up (0).
+func (t *Tracer) exitCode(proc windows.Handle) uint32 {
+	code, alive := t.exitState(proc)
+	if alive {
+		return 0
+	}
+	return code
 }
 
 // finalizeOutputs appends the captured stdout/stderr as Output events.
@@ -527,6 +621,19 @@ func copyStream(r io.Reader, b *streamBuf, done chan<- struct{}) {
 		if err != nil {
 			return
 		}
+	}
+}
+
+// drainAndClose waits for a capture goroutine to finish (EOF), then closes
+// its read end. If the goroutine is still blocked in Read after the timeout
+// (the child refused to die), the read end is NOT closed: closing it would
+// deadlock or crash the Go runtime on Windows, and the goroutine leaks
+// instead — acceptable for the pathological stuck-child case.
+func drainAndClose(done <-chan struct{}, f *os.File) {
+	select {
+	case <-done:
+		f.Close()
+	case <-time.After(2 * time.Second):
 	}
 }
 
